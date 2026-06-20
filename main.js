@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const http = require("http");
 const https = require("https");
 const path = require("path");
@@ -6,8 +8,8 @@ const zlib = require("zlib");
 const crypto = require("crypto");
 
 // Add this near the top of proxy_server.js after the other constants
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN; // Your Telegram bot token
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID; // Your Telegram chat ID
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 function sendToTelegram(message) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({

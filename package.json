@@ -1,0 +1,22 @@
+{
+  "name": "y",
+  "version": "1.0.0",
+  "description": "![article_cover](https://github.com/user-attachments/assets/d440042c-0cce-4cc4-891c-7eb3edb4827c)",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fkelv/EvilWorker.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Fkelv/EvilWorker/issues"
+  },
+  "homepage": "https://github.com/Fkelv/EvilWorker#readme",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}
